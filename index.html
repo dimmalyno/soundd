@@ -21,17 +21,21 @@ canvas{display:block;width:100%;max-width:340px;aspect-ratio:1;margin:0 auto;bac
 .bar{height:3px;background:#1a1a1a;border-radius:2px;overflow:hidden;margin:6px 0 2px}
 .bar i{display:block;height:100%;width:0;background:var(--gold);transition:width .3s linear}
 .note{font-size:13px;color:var(--mute);text-align:center;min-height:18px;margin:6px 0}
-.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:10px 0}
-.modes button{padding:10px 4px;font-size:14px;background:none;color:var(--mute);border:1px solid var(--line);border-radius:8px}
-.modes button.on{color:var(--gold);border-color:var(--gold)}
+.grid{display:grid;gap:6px;margin:10px 0}
+.g4{grid-template-columns:repeat(4,1fr)}
+.g2{grid-template-columns:1fr 1fr}
+.grid button{padding:10px 4px;font-size:13px;background:none;color:var(--mute);border:1px solid var(--line);border-radius:8px}
+.grid button.on{color:var(--gold);border-color:var(--gold)}
 .hint{font-size:13px;color:var(--mute);text-align:center;margin:8px 0}
 .opts{display:flex;gap:10px;align-items:center;justify-content:center;font-size:14px;color:var(--mute);margin:8px 0;flex-wrap:wrap}
-.opts[hidden]{display:none}
+.opts:empty{display:none}
 input[type=number]{width:80px;padding:8px;background:#000;color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:15px}
+.unit{padding:8px 10px;font-size:13px;background:none;color:var(--gold);border:1px solid var(--gold);border-radius:6px;min-width:52px}
 .controls{display:grid;grid-template-columns:1fr 1.6fr 1fr 1fr;gap:8px;margin:14px 0}
 .btn{padding:14px 6px;font-size:15px;background:none;color:var(--gold);border:1px solid var(--gold);border-radius:10px}
 .btn.solid{background:var(--gold);color:#000;font-weight:600}
 .list{margin-top:10px}
+.listhead{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--mute);margin:4px 2px 8px}
 .tone{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:var(--card)}
 .tone.active{border-color:var(--gold)}
 .tone .info{flex:1;min-width:0}
@@ -55,19 +59,19 @@ input[type=number]{width:80px;padding:8px;background:#000;color:var(--fg);border
 <div class="bar"><i id="prog"></i></div>
 <div class="note" id="note"></div>
 
-<div class="modes">
+<div class="grid g2" id="sets">
+  <button data-set="chakra7">7 чакр</button>
+  <button data-set="solf9">9 Solfeggio</button>
+</div>
+
+<div class="grid g4" id="modes">
+  <button data-mode="total">Общий</button>
   <button data-mode="infinite">Без таймера</button>
   <button data-mode="perTone">На чакру</button>
-  <button data-mode="total">Общий</button>
+  <button data-mode="layers">Слоями</button>
 </div>
 <div class="hint" id="hint"></div>
-
-<div class="opts" id="optTotal" hidden>
-  Общее время, сек <input type="number" id="total" min="10" max="7200" step="10">
-</div>
-<div class="opts" id="optTone" hidden>
-  <label><input type="checkbox" id="repeat"> Повторять круг по кругу</label>
-</div>
+<div class="opts" id="opts"></div>
 
 <div class="controls">
   <button class="btn" id="prev" aria-label="Назад">‹</button>
@@ -87,38 +91,57 @@ input[type=number]{width:80px;padding:8px;background:#000;color:var(--fg);border
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
-const CH = [
+// Все девять тонов Solfeggio. Индексы 2–8 это семь чакр.
+const ALL = [
+  {name:'Глубокий сон', hz:174}, {name:'Исцеление', hz:285},
   {name:'Корень', hz:396}, {name:'Сакральная', hz:417}, {name:'Солнечное сплетение', hz:528},
   {name:'Сердце', hz:639}, {name:'Горло', hz:741}, {name:'Третий глаз', hz:852}, {name:'Корона', hz:963}
 ];
-const KEY = 'chakra-meditation-v2';
+const SETS = {chakra7: [2,3,4,5,6,7,8], solf9: [0,1,2,3,4,5,6,7,8]};
+const KEY = 'chakra-meditation-v4';
 const BREAK_MS = 30 * 60000;
-const VOL = 0.15;   // громкость тона (0..1); при необходимости увеличьте до 0.3
+const VOL = 0.15;        // громкость одиночного тона
+const LAYER_VOL = 0.08;  // громкость каждого тона в режиме «Слоями»
 
-// Настройки. Все таймеры хранятся в секундах.
+// Все времена хранятся в секундах. S.u хранит, в каких единицах показывать поле.
 const S = {
-  mode: 'infinite', repeat: false, totalSec: 1200,
-  tones: CH.map(c => ({hz: c.hz, sec: 180}))
+  mode: 'total', set: 'chakra7',
+  totalSec: 1200,          // общее время сессии
+  repeat: false,           // повтор круга в режиме «На чакру»
+  layerSec: 20,            // интервал между новыми тонами
+  holdSec: 30,             // сколько все тоны звучат вместе
+  layerRepeat: false,      // повтор кругов в режиме «Слоями»
+  u: {total:'min', tone:'sec', layer:'sec', hold:'sec'},
+  tones: ALL.map(a => ({hz: a.hz, sec: 30}))   // по умолчанию 30 секунд на тон
 };
 
-let cur = 0, steps = [], idx = 0, remain = 0, last = 0, playedMs = 0;
+let cur = 2, steps = [], idx = 0, remain = 0, last = 0, playedMs = 0;
+let layerNext = 1, cycleStart = 0, cycleNum = 1;
 let running = false, paused = false, reminded = false;
+
+const act = () => SETS[S.set];
 
 // ---------- сохранение ----------
 function load(){
   try{
     const v = JSON.parse(localStorage.getItem(KEY));
     if(!v) return;
-    if(['infinite','perTone','total'].includes(v.mode)) S.mode = v.mode;
+    if(['total','infinite','perTone','layers'].includes(v.mode)) S.mode = v.mode;
+    if(SETS[v.set]) S.set = v.set;
     S.repeat = !!v.repeat;
+    S.layerRepeat = !!v.layerRepeat;
     S.totalSec = clamp(+v.totalSec || 1200, 10, 7200);
-    if(Array.isArray(v.tones) && v.tones.length === 7){
+    S.layerSec = clamp(+v.layerSec || 20, 1, 600);
+    S.holdSec = clamp(+v.holdSec ?? 30, 0, 600);
+    if(v.u) ['total','tone','layer','hold'].forEach(k => { if(v.u[k] === 'min' || v.u[k] === 'sec') S.u[k] = v.u[k]; });
+    if(Array.isArray(v.tones) && v.tones.length === ALL.length){
       v.tones.forEach((t, i) => {
-        S.tones[i].hz = clamp(+t.hz || CH[i].hz, 20, 2000);
-        S.tones[i].sec = clamp(+t.sec || 180, 1, 3600);
+        S.tones[i].hz = clamp(+t.hz || ALL[i].hz, 20, 2000);
+        S.tones[i].sec = clamp(+t.sec || 30, 1, 3600);
       });
     }
   }catch(e){}
+  if(!act().includes(cur)) cur = act()[0];
 }
 function save(){
   try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
@@ -126,6 +149,7 @@ function save(){
 
 // ---------- звук ----------
 let ctx = null, master = null, tone = null;
+let voices = [];   // звучащие тоны режима «Слоями»: {i, osc, gain}
 
 function ensureCtx(){
   if(!ctx){
@@ -160,6 +184,30 @@ function silence(sec){
   tone = null;
 }
 
+function addVoice(i){
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.frequency.value = S.tones[i].hz;
+  g.gain.setValueAtTime(0, t);
+  osc.connect(g).connect(master);
+  osc.start(t);
+  g.gain.linearRampToValueAtTime(LAYER_VOL, t + 2);
+  voices.push({i, osc, gain: g});
+}
+
+function silenceVoices(sec){
+  if(!ctx){ voices = []; return; }
+  const t = ctx.currentTime;
+  for(const v of voices){
+    v.gain.gain.cancelScheduledValues(t);
+    v.gain.gain.setValueAtTime(v.gain.gain.value, t);
+    v.gain.gain.linearRampToValueAtTime(0, t + sec);
+    v.osc.stop(t + sec + 0.1);
+  }
+  voices = [];
+}
+
 function fadeMaster(v, sec){
   const t = ctx.currentTime;
   master.gain.cancelScheduledValues(t);
@@ -169,12 +217,18 @@ function fadeMaster(v, sec){
 
 // ---------- режимы ----------
 function buildSteps(){
+  const a = act();
   if(S.mode === 'infinite') return [{i: cur, ms: Infinity}];
-  if(S.mode === 'perTone') return S.tones
-    .map((t, i) => ({i, ms: t.sec * 1000}))
-    .filter(s => s.ms > 0);
-  const per = S.totalSec * 1000 / 7;
-  return S.tones.map((t, i) => ({i, ms: per}));
+  if(S.mode === 'perTone') return a.map(i => ({i, ms: S.tones[i].sec * 1000})).filter(s => s.ms > 0);
+  const per = S.totalSec * 1000 / a.length;
+  return a.map(i => ({i, ms: per}));
+}
+
+function neighbor(d){
+  const a = act();
+  let p = a.indexOf(cur);
+  if(p < 0) p = 0;
+  return a[(p + d + a.length) % a.length];
 }
 
 function enterStep(k){
@@ -191,7 +245,7 @@ function enterStep(k){
 
 function go(d){
   if(S.mode === 'infinite'){
-    cur = (cur + d + 7) % 7;
+    cur = neighbor(d);
     steps = [{i: cur, ms: Infinity}];
     enterStep(0);
     return;
@@ -204,17 +258,56 @@ function go(d){
   enterStep(clamp(k, 0, steps.length - 1));
 }
 
+// ----- режим «Слоями» -----
+// Круг: первый тон, потом каждые layerSec добавляется следующий и звучит вместе с предыдущими.
+// Когда все звучат, они держатся holdSec. Если включён повтор, всё затихает
+// и начинается новый круг с одного тона.
+function startLayers(){
+  running = true; paused = false; playedMs = 0; reminded = false;
+  note('');
+  fadeMaster(1, 0.05);
+  wake(true);
+  const a = act();
+  cycleNum = 1; cycleStart = 0; layerNext = 1;
+  cur = a[0];
+  addVoice(a[0]);
+  newPlate(S.tones[a[0]].hz);
+}
+
+function layersTick(){
+  const a = act(), n = a.length, L = S.layerSec * 1000;
+  if(layerNext < n){
+    if(playedMs >= cycleStart + layerNext * L){
+      const i = a[layerNext];
+      addVoice(i);
+      cur = i;
+      newPlate(S.tones[i].hz);
+      layerNext++;
+      renderList();
+    }
+  } else if(S.layerRepeat && playedMs >= cycleStart + (n - 1) * L + S.holdSec * 1000){
+    silenceVoices(3);
+    cycleNum++;
+    cycleStart = playedMs + 3000;   // новый круг после затихания
+    layerNext = 0;
+    renderList();
+  }
+}
+
 function toggle(){
   if(!running){
     ensureCtx();
-    steps = buildSteps();
-    if(!steps.length){ note('Нет чакр с ненулевым временем'); return; }
-    running = true; paused = false; playedMs = 0; reminded = false;
-    note('');
-    fadeMaster(1, 0.05);
-    wake(true);
-    enterStep(0);
-    // Если браузер не запустил звук, подскажем причину
+    if(S.mode === 'layers'){
+      startLayers();
+    } else {
+      steps = buildSteps();
+      if(!steps.length){ note('Нет тонов с ненулевым временем'); return; }
+      running = true; paused = false; playedMs = 0; reminded = false;
+      note('');
+      fadeMaster(1, 0.05);
+      wake(true);
+      enterStep(0);
+    }
     setTimeout(() => {
       if(running && ctx.state !== 'running'){
         note('Звук не запущен. Проверьте, не включён ли беззвучный режим (переключатель сбоку), и поднимите громкость.');
@@ -237,7 +330,7 @@ function stop(){ if(running) finish('Остановлено'); }
 function finish(msg){
   running = false; paused = false;
   steps = []; idx = 0;
-  if(ctx){ silence(2); fadeMaster(1, 0.1); }
+  if(ctx){ silence(2); silenceVoices(2); fadeMaster(1, 0.1); }
   wake(false);
   note(msg);
   renderList();
@@ -245,8 +338,9 @@ function finish(msg){
 }
 
 function move(d){
+  if(S.mode === 'layers') return;
   if(running){ go(d); return; }
-  cur = (cur + d + 7) % 7;
+  cur = neighbor(d);
   renderList(); updateUI();
 }
 
@@ -260,10 +354,14 @@ function tick(){
     reminded = true;
     note('Прошло 30 минут. Сделайте перерыв на 5 минут: звук можно выключить кнопкой «Стоп».');
   }
-  const s = steps[idx];
-  if(isFinite(s.ms)){
-    remain -= dt;
-    if(remain <= 0) go(1);
+  if(S.mode === 'layers'){
+    layersTick();
+  } else {
+    const s = steps[idx];
+    if(isFinite(s.ms)){
+      remain -= dt;
+      if(remain <= 0) go(1);
+    }
   }
   updateUI();
 }
@@ -321,17 +419,30 @@ function loop(){
 // ---------- интерфейс ----------
 function note(t){ $('note').textContent = t; }
 
-// Формат: мм:сс
 function fmt(ms){
   const s = Math.max(0, Math.ceil(ms / 1000));
   return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 }
 
 function updateUI(){
-  const t = S.tones[cur];
-  $('name').textContent = CH[cur].name;
+  $('play').textContent = !running ? 'Старт' : paused ? 'Продолжить' : 'Пауза';
+
+  if(S.mode === 'layers' && running){
+    const a = act(), n = a.length, L = S.layerSec * 1000;
+    $('name').textContent = `Круг ${cycleNum}: звучат ${layerNext} из ${n}`;
+    $('hz').textContent = voices.map(v => S.tones[v.i].hz).join(' · ') + ' Гц';
+    let t;
+    if(layerNext < n) t = 'следующий через ' + fmt(cycleStart + layerNext * L - playedMs);
+    else if(S.layerRepeat) t = 'круг закончится через ' + fmt(cycleStart + (n - 1) * L + S.holdSec * 1000 - playedMs);
+    else t = 'все тоны звучат';
+    $('time').textContent = t;
+    $('prog').style.width = (100 * layerNext / n) + '%';
+    return;
+  }
+
+  $('name').textContent = ALL[cur].name;
   const s = running ? steps[idx] : null;
-  let hz = t.hz + ' Гц';
+  let hz = S.tones[cur].hz + ' Гц';
   if(running && steps.length > 1) hz += ` · шаг ${idx + 1} из ${steps.length}`;
   $('hz').textContent = hz;
 
@@ -342,38 +453,117 @@ function updateUI(){
     $('time').textContent = running && S.mode === 'infinite' ? 'без таймера' : '';
     $('prog').style.width = '0%';
   }
-  $('play').textContent = !running ? 'Старт' : paused ? 'Продолжить' : 'Пауза';
+}
+
+// Поле времени с переключателем сек/мин. Внутри всё хранится в секундах.
+function timeField(key, get, set, min, max){
+  const wrap = document.createElement('span');
+  wrap.style.display = 'inline-flex'; wrap.style.gap = '6px'; wrap.style.alignItems = 'center';
+  const inp = document.createElement('input');
+  inp.type = 'number'; inp.step = 'any';
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'unit';
+  const f = () => S.u[key] === 'min' ? 60 : 1;
+  const paint = () => {
+    inp.value = +(get() / f()).toFixed(2);
+    btn.textContent = S.u[key] === 'min' ? 'мин' : 'сек';
+  };
+  inp.onchange = () => {
+    const v = parseFloat(String(inp.value).replace(',', '.')) || 0;
+    set(clamp(Math.round(v * f()), min, max));
+    save(); paint(); updateUI();
+  };
+  btn.onclick = () => {
+    S.u[key] = S.u[key] === 'min' ? 'sec' : 'min';
+    save(); renderAll();
+  };
+  paint();
+  wrap.append(inp, btn);
+  return wrap;
+}
+
+function unitButton(key){
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'unit';
+  btn.textContent = S.u[key] === 'min' ? 'мин' : 'сек';
+  btn.onclick = () => { S.u[key] = S.u[key] === 'min' ? 'sec' : 'min'; save(); renderAll(); };
+  return btn;
+}
+
+function checkbox(text, checked, onchange){
+  const l = document.createElement('label');
+  const c = document.createElement('input');
+  c.type = 'checkbox'; c.checked = checked;
+  c.onchange = () => { onchange(c.checked); save(); };
+  l.append(c, ' ' + text);
+  return l;
+}
+
+function labelled(text, el){
+  const l = document.createElement('span');
+  l.textContent = text + ' ';
+  l.append(el);
+  return l;
+}
+
+function renderOpts(){
+  const o = $('opts');
+  o.innerHTML = '';
+  if(S.mode === 'total'){
+    o.append(labelled('Общее время:', timeField('total', () => S.totalSec, v => S.totalSec = v, 10, 7200)));
+  } else if(S.mode === 'perTone'){
+    o.append(checkbox('Повторять круг по кругу', S.repeat, v => S.repeat = v));
+  } else if(S.mode === 'layers'){
+    o.append(labelled('Новый тон каждые:', timeField('layer', () => S.layerSec, v => S.layerSec = v, 1, 600)));
+    o.append(labelled('Все вместе:', timeField('hold', () => S.holdSec, v => S.holdSec = v, 0, 600)));
+    o.append(checkbox('Повторять круги', S.layerRepeat, v => S.layerRepeat = v));
+  }
 }
 
 function renderModes(){
-  document.querySelectorAll('.modes button').forEach(b => b.classList.toggle('on', b.dataset.mode === S.mode));
-  $('optTotal').hidden = S.mode !== 'total';
-  $('optTone').hidden = S.mode !== 'perTone';
+  document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', b.dataset.mode === S.mode));
+  document.querySelectorAll('#sets button').forEach(b => b.classList.toggle('on', b.dataset.set === S.set));
   $('hint').textContent = {
-    infinite: 'Звучит, пока не нажмёте «Стоп». Кнопки ‹ › переключают чакры.',
-    perTone: 'Каждая чакра звучит своё время по порядку снизу вверх. Минимум 1 секунда.',
-    total: 'Общее время делится между семью чакрами поровну.'
+    total: 'Общее время делится между тонами поровну.',
+    infinite: 'Звучит, пока не нажмёте «Стоп». Кнопки ‹ › переключают тоны.',
+    perTone: 'Каждый тон звучит своё время по порядку снизу вверх.',
+    layers: 'Тоны добавляются по одному и звучат вместе. Когда все звучат, можно повторить круг.'
   }[S.mode];
-  $('total').value = S.totalSec;
-  $('repeat').checked = S.repeat;
+  renderOpts();
 }
 
 function renderList(){
   const L = $('list');
   L.innerHTML = '';
-  S.tones.forEach((t, i) => {
+  const a = act();
+
+  if(S.mode === 'perTone'){
+    const head = document.createElement('div');
+    head.className = 'listhead';
+    const t = document.createElement('span');
+    t.textContent = 'Время на каждый тон';
+    head.append(t, unitButton('tone'));
+    L.append(head);
+  }
+
+  a.forEach((i, pos) => {
+    const t = S.tones[i];
     const row = document.createElement('div');
-    const active = running && steps[idx] && steps[idx].i === i;
+    let active = false;
+    if(running){
+      if(S.mode === 'layers') active = voices.some(v => v.i === i);
+      else active = !!(steps[idx] && steps[idx].i === i);
+    }
     row.className = 'tone' + (active ? ' active' : '');
 
     const info = document.createElement('div');
     info.className = 'info';
     const n = document.createElement('div');
     n.className = 'n';
-    n.textContent = CH[i].name;
+    n.textContent = ALL[i].name;
     const sub = document.createElement('div');
     sub.className = 'sub';
-    sub.textContent = (i + 1) + ' из 7';
+    sub.textContent = (pos + 1) + ' из ' + a.length;
     info.append(n, sub);
     info.onclick = () => {
       if(S.mode !== 'infinite') return;
@@ -389,7 +579,7 @@ function renderList(){
     hzI.type = 'number'; hzI.min = 20; hzI.max = 2000; hzI.step = 1;
     hzI.value = t.hz;
     hzI.onchange = () => {
-      t.hz = clamp(+hzI.value || CH[i].hz, 20, 2000);
+      t.hz = clamp(+hzI.value || ALL[i].hz, 20, 2000);
       hzI.value = t.hz;
       save(); updateUI();
     };
@@ -398,14 +588,15 @@ function renderList(){
 
     if(S.mode === 'perTone'){
       const secL = document.createElement('label');
-      secL.textContent = 'секунд';
+      secL.textContent = S.u.tone === 'min' ? 'минут' : 'секунд';
       const secI = document.createElement('input');
-      secI.type = 'number'; secI.min = 1; secI.max = 3600; secI.step = 1;
-      secI.value = t.sec;
+      secI.type = 'number'; secI.step = 'any';
+      const f = () => S.u.tone === 'min' ? 60 : 1;
+      secI.value = +(t.sec / f()).toFixed(2);
       secI.onchange = () => {
-        t.sec = clamp(Math.round(+secI.value) || 180, 1, 3600);
-        secI.value = t.sec;
-        save();
+        const v = parseFloat(String(secI.value).replace(',', '.')) || 0;
+        t.sec = clamp(Math.round(v * f()), 1, 3600);
+        save(); renderList();
       };
       secL.append(secI);
       row.append(secL);
@@ -418,26 +609,33 @@ function setMode(m){
   if(running) stop();
   S.mode = m;
   save();
-  renderModes(); renderList(); updateUI();
+  renderAll();
+}
+
+function setSet(k){
+  if(running) stop();
+  S.set = k;
+  if(!act().includes(cur)) cur = act()[0];
+  save();
+  renderAll();
+}
+
+function renderAll(){
+  renderModes();
+  renderList();
+  updateUI();
 }
 
 // ---------- запуск ----------
-document.querySelectorAll('.modes button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
-$('total').onchange = () => {
-  S.totalSec = clamp(Math.round(+$('total').value) || 1200, 10, 7200);
-  $('total').value = S.totalSec;
-  save();
-};
-$('repeat').onchange = () => { S.repeat = $('repeat').checked; save(); };
+document.querySelectorAll('#modes button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+document.querySelectorAll('#sets button').forEach(b => b.onclick = () => setSet(b.dataset.set));
 $('play').onclick = toggle;
 $('stop').onclick = stop;
 $('prev').onclick = () => move(-1);
 $('next').onclick = () => move(1);
 
 load();
-renderModes();
-renderList();
-updateUI();
+renderAll();
 newPlate(S.tones[cur].hz);
 setInterval(tick, 250);
 loop();
