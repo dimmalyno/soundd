@@ -24,6 +24,7 @@ canvas{display:block;width:100%;max-width:340px;aspect-ratio:1;margin:0 auto;bac
 .grid{display:grid;gap:6px;margin:10px 0}
 .g4{grid-template-columns:repeat(4,1fr)}
 .g2{grid-template-columns:1fr 1fr}
+.g3{grid-template-columns:1fr 1fr 1fr}
 .grid button{padding:10px 4px;font-size:13px;background:none;color:var(--mute);border:1px solid var(--line);border-radius:8px}
 .grid button.on{color:var(--gold);border-color:var(--gold)}
 .hint{font-size:13px;color:var(--mute);text-align:center;margin:8px 0}
@@ -59,9 +60,10 @@ input[type=number]{width:80px;padding:8px;background:#000;color:var(--fg);border
 <div class="bar"><i id="prog"></i></div>
 <div class="note" id="note"></div>
 
-<div class="grid g2" id="sets">
+<div class="grid g3" id="sets">
   <button data-set="chakra7">7 чакр</button>
   <button data-set="solf9">9 Solfeggio</button>
+  <button data-set="fib6">Фибоначчи</button>
 </div>
 
 <div class="grid g4" id="modes">
@@ -95,9 +97,12 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const ALL = [
   {name:'Глубокий сон', hz:174}, {name:'Исцеление', hz:285},
   {name:'Корень', hz:396}, {name:'Сакральная', hz:417}, {name:'Солнечное сплетение', hz:528},
-  {name:'Сердце', hz:639}, {name:'Горло', hz:741}, {name:'Третий глаз', hz:852}, {name:'Корона', hz:963}
+  {name:'Сердце', hz:639}, {name:'Горло', hz:741}, {name:'Третий глаз', hz:852}, {name:'Корона', hz:963},
+  // Фибоначчи: каждое число равно сумме двух предыдущих
+  {name:'Фибоначчи 89', hz:89}, {name:'Фибоначчи 144', hz:144}, {name:'Фибоначчи 233', hz:233},
+  {name:'Фибоначчи 377', hz:377}, {name:'Фибоначчи 610', hz:610}, {name:'Фибоначчи 987', hz:987}
 ];
-const SETS = {chakra7: [2,3,4,5,6,7,8], solf9: [0,1,2,3,4,5,6,7,8]};
+const SETS = {chakra7: [2,3,4,5,6,7,8], solf9: [0,1,2,3,4,5,6,7,8], fib6: [9,10,11,12,13,14]};
 const KEY = 'chakra-meditation-v4';
 const BREAK_MS = 30 * 60000;
 const VOL = 0.15;        // громкость одиночного тона
@@ -112,6 +117,7 @@ const S = {
   holdSec: 30,             // сколько все тоны звучат вместе
   layerRepeat: false,      // повтор кругов в режиме «Слоями»
   u: {total:'min', tone:'sec', layer:'sec', hold:'sec'},
+  vib: true,               // вибрация песка во время звучания
   tones: ALL.map(a => ({hz: a.hz, sec: 30}))   // по умолчанию 30 секунд на тон
 };
 
@@ -130,12 +136,13 @@ function load(){
     if(SETS[v.set]) S.set = v.set;
     S.repeat = !!v.repeat;
     S.layerRepeat = !!v.layerRepeat;
+    S.vib = v.vib !== false;
     S.totalSec = clamp(+v.totalSec || 1200, 10, 7200);
     S.layerSec = clamp(+v.layerSec || 20, 1, 600);
     S.holdSec = clamp(+v.holdSec ?? 30, 0, 600);
     if(v.u) ['total','tone','layer','hold'].forEach(k => { if(v.u[k] === 'min' || v.u[k] === 'sec') S.u[k] = v.u[k]; });
-    if(Array.isArray(v.tones) && v.tones.length === ALL.length){
-      v.tones.forEach((t, i) => {
+    if(Array.isArray(v.tones)){
+      v.tones.slice(0, ALL.length).forEach((t, i) => {
         S.tones[i].hz = clamp(+t.hz || ALL[i].hz, 20, 2000);
         S.tones[i].sec = clamp(+t.sec || 30, 1, 3600);
       });
@@ -396,23 +403,46 @@ function newPlate(hz){
   for(let i = 0; i < 150; i++) relax();
 }
 const z = (x, y) => Math.cos(N*Math.PI*x)*Math.cos(M*Math.PI*y) - Math.cos(M*Math.PI*x)*Math.cos(N*Math.PI*y);
-function relax(){
+// Песчинки прыгают и собираются к узловым линиям, как на вибрирующей пластине
+function relax(amp = 0.02){
   for(const p of P){
-    const nx = p[0] + (Math.random() - 0.5) * 0.02;
-    const ny = p[1] + (Math.random() - 0.5) * 0.02;
+    const nx = p[0] + (Math.random() - 0.5) * amp;
+    const ny = p[1] + (Math.random() - 0.5) * amp;
     if(nx < 0 || nx > 1 || ny < 0 || ny > 1) continue;
     if(Math.abs(z(nx, ny)) < Math.abs(z(p[0], p[1])) || Math.random() < 0.01){ p[0] = nx; p[1] = ny; }
   }
 }
-function draw(){
+
+let tPulse = 0;   // фаза «дыхания» вибрации
+
+// energy от 0 до 1: при 0 песок лежит спокойно, при 1 заметно дрожит
+function draw(energy){
   g2.fillStyle = '#050505';
   g2.fillRect(0, 0, W, W);
   g2.fillStyle = '#ffd27a';
-  for(const p of P) g2.fillRect(p[0] * W, p[1] * W, 2, 2);
+  const jitter = energy * 0.008;
+  for(let k = 0; k < P.length; k++){
+    const p = P[k];
+    const x = (p[0] + (Math.random() - 0.5) * jitter) * W;
+    const y = (p[1] + (Math.random() - 0.5) * jitter) * W;
+    const big = k % 3 === 0;
+    g2.globalAlpha = big ? 0.9 : 0.55 + 0.3 * energy;
+    const r = big ? 3 : 2;
+    g2.fillRect(x, y, r, r);
+  }
+  g2.globalAlpha = 1;
 }
+
 function loop(){
-  if(running && !paused && !still) relax();
-  draw();
+  const active = running && !paused && !still && S.vib;
+  let energy = 0;
+  if(active){
+    tPulse += 2 * Math.PI * 3 / 60;          // медленное дрожание, около 3 раз в секунду
+    energy = 0.5 + 0.5 * Math.sin(tPulse);
+    relax(0.01 + 0.02 * energy);
+    relax(0.01 + 0.02 * energy);
+  }
+  draw(energy);
   requestAnimationFrame(loop);
 }
 
@@ -518,6 +548,7 @@ function renderOpts(){
     o.append(labelled('Все вместе:', timeField('hold', () => S.holdSec, v => S.holdSec = v, 0, 600)));
     o.append(checkbox('Повторять круги', S.layerRepeat, v => S.layerRepeat = v));
   }
+  o.append(checkbox('Вибрация песка', S.vib, v => S.vib = v));
 }
 
 function renderModes(){
