@@ -1,1 +1,437 @@
-1
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Чакры">
+<meta name="theme-color" content="#000000">
+<title>Чакры: медитация</title>
+<style>
+:root{--bg:#000;--fg:#e8e2d0;--gold:#ffd27a;--mute:#8a8473;--card:#0f0f0f;--line:#2a2a2a}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,system-ui,sans-serif}
+body{max-width:520px;margin:0 auto;padding:max(12px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom))}
+h1{font-size:18px;font-weight:600;letter-spacing:.2em;text-align:center;margin:8px 0 12px;color:var(--gold)}
+canvas{display:block;width:100%;max-width:340px;aspect-ratio:1;margin:0 auto;background:#050505;border:1px solid #1d1a14;border-radius:6px}
+.now{text-align:center;margin-top:12px;min-height:84px}
+.now .name{font-size:20px;color:var(--gold)}
+.now .hz{font-size:14px;color:var(--mute);margin-top:2px}
+.now .time{font-size:30px;font-variant-numeric:tabular-nums;margin-top:6px}
+.bar{height:3px;background:#1a1a1a;border-radius:2px;overflow:hidden;margin:6px 0 2px}
+.bar i{display:block;height:100%;width:0;background:var(--gold);transition:width .3s linear}
+.note{font-size:13px;color:var(--mute);text-align:center;min-height:18px;margin:6px 0}
+.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:10px 0}
+.modes button{padding:10px 4px;font-size:14px;background:none;color:var(--mute);border:1px solid var(--line);border-radius:8px}
+.modes button.on{color:var(--gold);border-color:var(--gold)}
+.hint{font-size:13px;color:var(--mute);text-align:center;margin:8px 0}
+.opts{display:flex;gap:10px;align-items:center;justify-content:center;font-size:14px;color:var(--mute);margin:8px 0;flex-wrap:wrap}
+.opts[hidden]{display:none}
+input[type=number]{width:70px;padding:8px;background:#000;color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:15px}
+.controls{display:grid;grid-template-columns:1fr 1.6fr 1fr 1fr;gap:8px;margin:14px 0}
+.btn{padding:14px 6px;font-size:15px;background:none;color:var(--gold);border:1px solid var(--gold);border-radius:10px}
+.btn.solid{background:var(--gold);color:#000;font-weight:600}
+.list{margin-top:10px}
+.tone{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:var(--card)}
+.tone.active{border-color:var(--gold)}
+.tone .info{flex:1;min-width:0}
+.tone .n{font-size:15px}
+.tone .sub{font-size:12px;color:var(--mute)}
+.tone label{font-size:11px;color:var(--mute);display:flex;flex-direction:column;align-items:center;gap:2px}
+.tone input{width:64px}
+.footer{font-size:12px;color:var(--mute);text-align:center;margin-top:16px;line-height:1.5}
+</style>
+</head>
+<body>
+
+<h1>ЧАКРЫ</h1>
+<canvas id="cv" width="600" height="600" aria-label="Визуализация звука"></canvas>
+
+<div class="now">
+  <div class="name" id="name"></div>
+  <div class="hz" id="hz"></div>
+  <div class="time" id="time"></div>
+</div>
+<div class="bar"><i id="prog"></i></div>
+<div class="note" id="note"></div>
+
+<div class="modes">
+  <button data-mode="infinite">Без таймера</button>
+  <button data-mode="perTone">На чакру</button>
+  <button data-mode="total">Общий</button>
+</div>
+<div class="hint" id="hint"></div>
+
+<div class="opts" id="optTotal" hidden>
+  Общее время, мин <input type="number" id="total" min="5" max="120" step="5">
+</div>
+<div class="opts" id="optTone" hidden>
+  <label><input type="checkbox" id="repeat"> Повторять круг по кругу</label>
+</div>
+
+<div class="controls">
+  <button class="btn" id="prev" aria-label="Назад">‹</button>
+  <button class="btn solid" id="play">Старт</button>
+  <button class="btn" id="stop">Стоп</button>
+  <button class="btn" id="next" aria-label="Дальше">›</button>
+</div>
+
+<div class="list" id="list"></div>
+
+<div class="footer">
+  Наушники, громкость низкая. Звук включается после нажатия «Старт».<br>
+  Визуализация иллюстративная: форма фигур не является измерением.
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// Чакры: русские подписи и частоты по умолчанию (можно менять в списке)
+const CH = [
+  {name:'Корень', hz:396}, {name:'Сакральная', hz:417}, {name:'Солнечное сплетение', hz:528},
+  {name:'Сердце', hz:639}, {name:'Горло', hz:741}, {name:'Третий глаз', hz:852}, {name:'Корона', hz:963}
+];
+const KEY = 'chakra-meditation-v1';
+const BREAK_MS = 30 * 60000;
+
+// Настройки
+const S = {
+  mode: 'infinite', repeat: false, totalMin: 20,
+  tones: CH.map(c => ({hz: c.hz, min: 3}))
+};
+
+// Состояние сессии
+let cur = 0, steps = [], idx = 0, remain = 0, last = 0, playedMs = 0;
+let running = false, paused = false, reminded = false;
+
+// ---------- сохранение ----------
+function load(){
+  try{
+    const v = JSON.parse(localStorage.getItem(KEY));
+    if(!v) return;
+    if(['infinite','perTone','total'].includes(v.mode)) S.mode = v.mode;
+    S.repeat = !!v.repeat;
+    S.totalMin = +v.totalMin || 20;
+    if(Array.isArray(v.tones) && v.tones.length === 7){
+      v.tones.forEach((t, i) => {
+        S.tones[i].hz = clamp(+t.hz || CH[i].hz, 20, 2000);
+        S.tones[i].min = clamp(+t.min || 3, 1, 60);
+      });
+    }
+  }catch(e){}
+}
+function save(){
+  try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+// ---------- звук ----------
+let ctx = null, master = null, tone = null;
+const VOL = 0.05;
+
+function ensureCtx(){
+  if(!ctx){
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain();
+    master.gain.value = 1;
+    master.connect(ctx.destination);
+  }
+  if(ctx.state === 'suspended') ctx.resume();
+}
+
+function startTone(hz){
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.frequency.value = hz;
+  g.gain.setValueAtTime(0, t);
+  osc.connect(g).connect(master);
+  osc.start(t);
+  if(tone) silence(1.5);           // кроссфейд: старый тон уходит, новый нарастает
+  g.gain.linearRampToValueAtTime(VOL, t + 1.5);
+  tone = {osc, gain: g};
+}
+
+function silence(sec){
+  if(!tone) return;
+  const t = ctx.currentTime, {osc, gain} = tone;
+  gain.gain.cancelScheduledValues(t);
+  gain.gain.setValueAtTime(gain.gain.value, t);
+  gain.gain.linearRampToValueAtTime(0, t + sec);
+  osc.stop(t + sec + 0.1);
+  tone = null;
+}
+
+function fadeMaster(v, sec){
+  const t = ctx.currentTime;
+  master.gain.cancelScheduledValues(t);
+  master.gain.setValueAtTime(master.gain.value, t);
+  master.gain.linearRampToValueAtTime(v, t + sec);
+}
+
+// ---------- логика режимов ----------
+function buildSteps(){
+  if(S.mode === 'infinite') return [{i: cur, ms: Infinity}];
+  if(S.mode === 'perTone') return S.tones.map((t, i) => ({i, ms: t.min * 60000}));
+  const per = S.totalMin * 60000 / 7;
+  return S.tones.map((t, i) => ({i, ms: per}));
+}
+
+function enterStep(k){
+  idx = k;
+  const s = steps[k];
+  cur = s.i;
+  remain = s.ms;
+  last = Date.now();
+  startTone(S.tones[cur].hz);
+  newPlate(S.tones[cur].hz);
+  renderList();
+  updateUI();
+}
+
+function go(d){
+  if(S.mode === 'infinite'){
+    cur = (cur + d + 7) % 7;
+    steps = buildSteps_for(cur);
+    enterStep(0);
+    return;
+  }
+  let k = idx + d;
+  if(k >= steps.length){
+    if(S.mode === 'perTone' && S.repeat) k = 0;
+    else { finish('Сессия завершена'); return; }
+  }
+  enterStep(clamp(k, 0, steps.length - 1));
+}
+const buildSteps_for = i => [{i, ms: Infinity}];
+
+function toggle(){
+  if(!running){
+    ensureCtx();
+    steps = buildSteps();
+    if(!steps.length){ note('Нет чакр с ненулевым временем'); return; }
+    running = true; paused = false; playedMs = 0; reminded = false;
+    note('');
+    fadeMaster(1, 0.05);
+    wake(true);
+    enterStep(0);
+  } else if(paused){
+    paused = false;
+    last = Date.now();
+    fadeMaster(1, 0.3);
+  } else {
+    paused = true;
+    fadeMaster(0, 0.3);
+  }
+  renderList();
+  updateUI();
+}
+
+function stop(){ if(running) finish('Остановлено'); }
+
+function finish(msg){
+  running = false; paused = false;
+  steps = []; idx = 0;
+  if(ctx){ silence(2); fadeMaster(1, 0.1); }
+  wake(false);
+  note(msg);
+  renderList();
+  updateUI();
+}
+
+function move(d){
+  if(S.mode === 'infinite' && !running){ cur = (cur + d + 7) % 7; renderList(); updateUI(); return; }
+  if(running) go(d);
+  else { cur = (cur + d + 7) % 7; renderList(); updateUI(); }
+}
+
+// ---------- таймер ----------
+function tick(){
+  const now = Date.now(), dt = now - last;
+  last = now;
+  if(!running || paused) return;
+  playedMs += dt;
+  if(!reminded && playedMs >= BREAK_MS){
+    reminded = true;
+    note('Прошло 30 минут. Сделайте перерыв на 5 минут: звук можно выключить кнопкой «Стоп».');
+  }
+  const s = steps[idx];
+  if(isFinite(s.ms)){
+    remain -= dt;
+    if(remain <= 0) go(1);
+  }
+  updateUI();
+}
+
+// ---------- экран не гаснет во время сессии ----------
+let wl = null;
+async function wake(on){
+  try{
+    if(on && 'wakeLock' in navigator){ wl = await navigator.wakeLock.request('screen'); }
+    else if(wl){ await wl.release(); wl = null; }
+  }catch(e){}
+}
+document.addEventListener('visibilitychange', () => {
+  if(!document.hidden && running){
+    if(ctx && ctx.state === 'suspended') ctx.resume();
+    wake(true);
+  }
+});
+
+// ---------- визуализация ----------
+const cv = $('cv'), g2 = cv.getContext('2d'), W = cv.width;
+const P = Array.from({length: 2000}, () => [Math.random(), Math.random()]);
+let N = 3, M = 5;
+const still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Иллюстративное соответствие частоты и фигуры (не физическая модель)
+function newPlate(hz){
+  const k = clamp(Math.round((hz - 100) / 100), 0, 9);
+  N = 2 + Math.floor(k / 3);
+  M = N + 1 + (k % 3);
+  for(const p of P){ p[0] = Math.random(); p[1] = Math.random(); }
+  for(let i = 0; i < 150; i++) relax();
+}
+const z = (x, y) => Math.cos(N*Math.PI*x)*Math.cos(M*Math.PI*y) - Math.cos(M*Math.PI*x)*Math.cos(N*Math.PI*y);
+function relax(){
+  for(const p of P){
+    const nx = p[0] + (Math.random() - 0.5) * 0.02;
+    const ny = p[1] + (Math.random() - 0.5) * 0.02;
+    if(nx < 0 || nx > 1 || ny < 0 || ny > 1) continue;
+    if(Math.abs(z(nx, ny)) < Math.abs(z(p[0], p[1])) || Math.random() < 0.01){ p[0] = nx; p[1] = ny; }
+  }
+}
+function draw(){
+  g2.fillStyle = '#050505';
+  g2.fillRect(0, 0, W, W);
+  g2.fillStyle = '#ffd27a';
+  for(const p of P) g2.fillRect(p[0] * W, p[1] * W, 2, 2);
+}
+function loop(){
+  if(running && !paused && !still) relax();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ---------- интерфейс ----------
+function note(t){ $('note').textContent = t; }
+
+function fmt(ms){
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+}
+
+function updateUI(){
+  const t = S.tones[cur];
+  $('name').textContent = CH[cur].name;
+  const s = running ? steps[idx] : null;
+  let hz = t.hz + ' Гц';
+  if(running && steps.length > 1) hz += ` · шаг ${idx + 1} из ${steps.length}`;
+  $('hz').textContent = hz;
+
+  if(running && s && isFinite(s.ms)){
+    $('time').textContent = fmt(remain);
+    $('prog').style.width = (100 * (1 - remain / s.ms)) + '%';
+  } else {
+    $('time').textContent = running && S.mode === 'infinite' ? 'без таймера' : '';
+    $('prog').style.width = '0%';
+  }
+  $('play').textContent = !running ? 'Старт' : paused ? 'Продолжить' : 'Пауза';
+  $('play').classList.toggle('solid', true);
+}
+
+function renderModes(){
+  document.querySelectorAll('.modes button').forEach(b => b.classList.toggle('on', b.dataset.mode === S.mode));
+  $('optTotal').hidden = S.mode !== 'total';
+  $('optTone').hidden = S.mode !== 'perTone';
+  $('hint').textContent = {
+    infinite: 'Звучит, пока не нажмёте «Стоп». Кнопки ‹ › переключают чакры.',
+    perTone: 'Каждая чакра звучит своё время по порядку снизу вверх.',
+    total: 'Общее время делится между семью чакрами поровну.'
+  }[S.mode];
+  $('total').value = S.totalMin;
+  $('repeat').checked = S.repeat;
+}
+
+function renderList(){
+  const L = $('list');
+  L.innerHTML = '';
+  S.tones.forEach((t, i) => {
+    const row = document.createElement('div');
+    const active = running && steps[idx] && steps[idx].i === i;
+    row.className = 'tone' + (active ? ' active' : '');
+
+    const info = document.createElement('div');
+    info.className = 'info';
+    const n = document.createElement('div');
+    n.className = 'n';
+    n.textContent = CH[i].name;
+    const sub = document.createElement('div');
+    sub.className = 'sub';
+    sub.textContent = (i + 1) + ' из 7';
+    info.append(n, sub);
+    info.onclick = () => {
+      if(S.mode !== 'infinite') return;
+      cur = i;
+      if(running){ steps = buildSteps_for(i); enterStep(0); }
+      else { renderList(); updateUI(); }
+    };
+    row.append(info);
+
+    const hzL = document.createElement('label');
+    hzL.textContent = 'Гц';
+    const hzI = document.createElement('input');
+    hzI.type = 'number'; hzI.min = 20; hzI.max = 2000; hzI.step = 1;
+    hzI.value = t.hz;
+    hzI.onchange = () => {
+      t.hz = clamp(+hzI.value || CH[i].hz, 20, 2000);
+      hzI.value = t.hz;
+      save(); updateUI();
+    };
+    hzL.append(hzI);
+    row.append(hzL);
+
+    if(S.mode === 'perTone'){
+      const minL = document.createElement('label');
+      minL.textContent = 'мин';
+      const minI = document.createElement('input');
+      minI.type = 'number'; minI.min = 1; minI.max = 60; minI.step = 1;
+      minI.value = t.min;
+      minI.onchange = () => {
+        t.min = clamp(+minI.value || 3, 1, 60);
+        minI.value = t.min;
+        save();
+      };
+      minL.append(minI);
+      row.append(minL);
+    }
+    L.append(row);
+  });
+}
+
+function setMode(m){
+  if(running) stop();
+  S.mode = m;
+  save();
+  renderModes(); renderList(); updateUI();
+}
+
+// ---------- запуск ----------
+document.querySelectorAll('.modes button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+$('total').onchange = () => { S.totalMin = clamp(+$('total').value || 20, 5, 120); $('total').value = S.totalMin; save(); };
+$('repeat').onchange = () => { S.repeat = $('repeat').checked; save(); };
+$('play').onclick = toggle;
+$('stop').onclick = stop;
+$('prev').onclick = () => move(-1);
+$('next').onclick = () => move(1);
+
+load();
+renderModes();
+renderList();
+updateUI();
+newPlate(S.tones[cur].hz);
+setInterval(tick, 250);
+loop();
+</script>
+</body>
+</html>
